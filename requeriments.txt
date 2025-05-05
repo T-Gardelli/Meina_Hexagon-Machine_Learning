@@ -1,0 +1,7 @@
+opencv-python
+numpy
+mss
+pydirectinput
+Pillow
+stable-baselines3[extra]
+gymnasium
