@@ -16,7 +16,7 @@ from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.monitor import Monitor
 
 # --- AMP Import ---
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 # --- Game env and Configs ---
 from game_env import SuperHexagonEnv
@@ -49,7 +49,7 @@ class SimpleCNN(BaseFeaturesExtractor):
     :param features_dim: (int) Number of features extracted.
     :param use_amp: (bool) Whether to enable autocast for the forward pass (requires CUDA).
     """
-    def __init__(self, observation_space: spaces.Box, features_dim: int = 128, use_amp: bool = False):
+    def __init__(self, observation_space: spaces.Box, features_dim: int = 256, use_amp: bool = False):
         super().__init__(observation_space, features_dim)
         n_input_channels = observation_space.shape[0]
         print(f"CustomCNN: Input channels={n_input_channels}")
@@ -75,11 +75,24 @@ class SimpleCNN(BaseFeaturesExtractor):
 
         # Compute shape by doing one forward pass
         with torch.no_grad():
-            dummy_input = torch.as_tensor(observation_space.sample()[None]).float()
-            # Use autocast during shape calculation if enabled, matching forward pass
-            with autocast(enabled=self.enable_amp):
-                 n_flatten = self.cnn(dummy_input).shape[1]
-            print(f"CustomCNN: Flattened features before final linear layer={n_flatten}")
+                dummy_input_cpu = torch.as_tensor(observation_space.sample()[None]).float()
+                # Determine target device for dummy input based on where the model will be
+                # This assumes the first linear layer's device is representative if the model is on CUDA
+                # Or defaults to CPU if not enabling AMP or no CUDA model parts yet.
+                target_device = torch.device('cpu')
+                if self.enable_amp: # If AMP is active, assume model will be on CUDA
+                    # A bit tricky as self.linear might not be on CUDA yet if SB3 moves it later
+                    # Safer to explicitly move the cnn part to CUDA for this test if AMP is on
+                    temp_cnn_device = torch.device('cuda') if self.enable_amp else torch.device('cpu')
+                    self.cnn.to(temp_cnn_device) # Temporarily move cnn for shape calculation
+                    dummy_input = dummy_input_cpu.to(temp_cnn_device)
+                else:
+                    dummy_input = dummy_input_cpu
+
+                with autocast(device_type='cuda', dtype=torch.float16, enabled=self.enable_amp):
+                    n_flatten = self.cnn(dummy_input).shape[1]
+                print(f"CustomCNN: Flattened features before final linear layer={n_flatten}")
+                self.cnn.to(torch.device('cpu')) # Move back if you only moved it temporarily (optional)
 
         # Define the final linear layer before outputting features
         self.linear = nn.Sequential(
@@ -90,7 +103,7 @@ class SimpleCNN(BaseFeaturesExtractor):
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         # Use autocast context manager for AMP if enabled
         # This applies mixed precision only to this feature extractor's operations
-        with autocast(enabled=self.enable_amp):
+        with autocast(device_type='cuda', enabled=self.enable_amp):
             features = self.cnn(observations)
             output = self.linear(features)
         # Ensure output is float32 for compatibility with subsequent layers in SB3
@@ -303,7 +316,7 @@ if __name__ == "__main__":
     callback_list = [checkpoint_callback, eval_callback]
 
     # --- Define the DQN Model ---
-    CUSTOM_FEATURES_DIM = 128
+    CUSTOM_FEATURES_DIM = 256
 
     # --- policy_kwargs to enable AMP in extractor ---
     policy_kwargs = dict(
@@ -326,12 +339,12 @@ if __name__ == "__main__":
         env,
         verbose=1,
         tensorboard_log=config.LOG_DIR,
-        buffer_size=150000,
+        buffer_size=100000,
         learning_rate=1e-4,
-        batch_size=64,
-        learning_starts=20000,
+        batch_size=128,
+        learning_starts=10000,
         target_update_interval=5000,
-        exploration_fraction=0.1,
+        exploration_fraction=0.2,
         exploration_initial_eps=1.0,
         exploration_final_eps=0.1,
         train_freq=(4, "step"),
@@ -346,7 +359,7 @@ if __name__ == "__main__":
     # print(model.policy) # Print the structure to verify
 
     # --- Load Existing Model (Optional) ---
-    load_model_path = None # Example: os.path.join(config.MODEL_SAVE_DIR, "best_model.zip")
+    load_model_path = None # Example: os.path.join(config.MODEL_SAVE_DIR, "best_model.zip") or None
     reset_num_timesteps = True
     if load_model_path and os.path.exists(load_model_path):
         print(f"Loading existing model from: {load_model_path}")
@@ -375,7 +388,7 @@ if __name__ == "__main__":
         print("Model and potentially buffer loaded.")
 
     # --- Start Training ---
-    TOTAL_TIMESTEPS = 15_000_000
+    TOTAL_TIMESTEPS = 200_000
 
     print("\n" + "="*40)
     print("!!! Ensure Super Hexagon is running and the window is ACTIVE !!!")

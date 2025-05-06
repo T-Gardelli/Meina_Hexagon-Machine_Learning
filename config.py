@@ -34,7 +34,7 @@ GAME_WINDOW_REGION = get_game_window_region()
 # --- Image Processing Settings ---
 # Size to resize the game image to (smaller is faster for the AI)
 # --- Image Processing ---
-RESIZE_DIM = (84, 84)           # Target size (Width, Height) for processed frames
+RESIZE_DIM = (256, 256)           # Target size (Width, Height) for processed frames
 BLUR_KERNEL_SIZE = (3,3)       # Gaussian blur kernel size (Use odd numbers, e.g., (3, 3), (5, 5))
 CANNY_THRESHOLD1 = 0           # Lower threshold for Canny edge detection (tune this)
 CANNY_THRESHOLD2 = 45          # Upper threshold for Canny edge detection (tune this)
